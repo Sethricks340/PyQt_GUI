@@ -88,7 +88,6 @@ class MainWindow(QMainWindow):
             "Coug 2": [None, QHBoxLayout()],
             "Coug 3": [None, QHBoxLayout()]
         }
-    #this is done by 
 
         #create the widgets from the tab dict, assign layouts, and add each to self.tabs
         for name in self.tab_dict:
@@ -310,7 +309,7 @@ class MainWindow(QMainWindow):
         widget.setPalette(palette)
 
     def load_coug1_missions_button(self):
-        self.confirm_reject_label.setText("Loading Coug 1 missiony...")
+        self.confirm_reject_label.setText("Loading Coug 1 mission...")
         self.publish_from_gui("Loading the missions...")
 
     def load_missions_button(self):
