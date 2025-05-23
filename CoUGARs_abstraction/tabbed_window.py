@@ -1,7 +1,6 @@
 import sys 
 import random
-
-from PyQt6.QtWidgets import (QApplication, QMainWindow, 
+from PyQt6.QtWidgets import (QScrollArea, QApplication, QMainWindow, 
     QWidget, QPushButton, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame,
     QSizePolicy, QSpacerItem, QGridLayout, QStyle, QWidget, QDialog, QDialogButtonBox
 )
@@ -9,8 +8,17 @@ from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtGui import QColor, QPalette, QFont, QPixmap, QKeySequence,QShortcut
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    # Initializes GUI window with a ros node inside
+    def __init__(self, ros_node):
+        """
+        Initializes GUI window with a ros node inside
+
+        Parameters:
+            ros_node (node): node passed in from ros in order to access the publisher
+        """
+        
         super().__init__()
+        self.ros_node = ros_node
         self.setWindowTitle("CoUGARS_GUI")
         scale = 300  # dev usage for manually scaling the window
         self.resize(QSize(4 * scale, 3 * scale))
@@ -29,14 +37,34 @@ class MainWindow(QMainWindow):
             "DVL_sensors": {1: 0, 2: 0, 3: 0},
             "GPS_sensors": {1: 2, 2: 1, 3: 0},
             "IMU_sensors": {1: 0, 2: 0, 3: 0},
+            "Leak_sensors": {1: 0, 2: 2, 3: 1},
+            "Battery_sensors": {1: 0, 2: 0, 3: 0},
+
+            #0->negative, 1->positive, 2->waiting
+            #Cougs 1-3 nodes
+            "Safety_Monitoring_nodes": {1: 0, 2: 0, 3: 0},
+            "Depth_Controller_nodes": {1: 0, 2: 0, 3: 0},
+            "Heading_Controller_nodes": {1: 0, 2: 0, 3: 0},
+            "Factor_Graph_nodes": {1: 0, 2: 0, 3: 0},
+            "Modem_Timing_nodes": {1: 0, 2: 0, 3: 0},
 
             #Cougs 1-3 status messages
             "Status_messages": {1: "", 2: "", 3: ""},
 
             #Cougs 1-3 last messages
-            "Last_messages": {1: "", 2: "", 3: ""}
+            "Last_messages": {1: "", 2: "", 3: ""},
+
+            #Cougs 1-3 message logs, lists of strings
+            "Console_messages": {1: [], 2: [], 3: []},
+
+            #Cougs 1-3 message logs, lists of strings
+            "Missions": {1: "", 2: "", 3: ""},            
+            
+            #Cougs 1-3 message logs, lists of strings
+            "Modems": {1: "", 2: "", 3: ""},
         }
 
+        #This is a dictionary to map the feedback_dict to the correct symbols
         #"x" symbol -> SP_DialogNoButton
         #"check" symbol -> SP_DialogYesButton
         # "waiting" symbol -> SP_TitleBarContextHelpButton (for now, probably will change)
@@ -46,17 +74,21 @@ class MainWindow(QMainWindow):
             2: QStyle.StandardPixmap.SP_TitleBarContextHelpButton
         }
 
+        #Create the tabs
         self.tabs = QTabWidget()
+        #Orient the tabs at the tob of the screen
         self.tabs.setTabPosition(QTabWidget.TabPosition.North)
+        #The tabs' order can't be changed or moved
         self.tabs.setMovable(False)
 
-        #Placeholders for the tabs
+        #Placeholders for the tabs layout, to be accessed later. 
         self.tab_dict = {
             "General": [None, QHBoxLayout()],
             "Coug 1": [None, QHBoxLayout()],
             "Coug 2": [None, QHBoxLayout()],
             "Coug 3": [None, QHBoxLayout()]
         }
+    #this is done by 
 
         #create the widgets from the tab dict, assign layouts, and add each to self.tabs
         for name in self.tab_dict:
@@ -80,12 +112,19 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(content_widget, name)
             self.set_background(content_widget, "cadetblue")
 
+        #Set up the first tab- the general page
         self.set_general_page_widgets()
+        #Set up the second tab - the first coug
+        self.set_specific_coug_widgets(1)
+        #Set up the third tab - the second coug
+        self.set_specific_coug_widgets(2)
+        #Set up the fourth tab - the third coug
+        self.set_specific_coug_widgets(3)
 
         #Emergency exit GUI button
         self.emergency_exit_gui_button = QPushButton("Close GUI")
         self.emergency_exit_gui_button.clicked.connect(self.close_window)
-
+        self.emergency_exit_gui_button.setStyleSheet("background-color: red; color: black;")
 
         #Random data -> for dev till we have data
         self.random_data_button = QPushButton("Random Data Button")
@@ -95,22 +134,30 @@ class MainWindow(QMainWindow):
         shortcut = QShortcut(QKeySequence("Ctrl+C"), self)
         shortcut.activated.connect(self.close)
 
+        #The overall layout is vertical
         self.main_layout = QVBoxLayout()
+        #Add the tabs to the main layout
         self.main_layout.addWidget(self.tabs)
+        #button confirmation label
         self.confirm_reject_label = QLabel("Confirmation/Rejection messages from command buttons will appear here")
         self.main_layout.addWidget(self.confirm_reject_label, alignment=Qt.AlignmentFlag.AlignTop)
         self.main_layout.addSpacing(40)
+        #add the random dev button and the exit gui button
         self.main_layout.addWidget(self.random_data_button)
         self.main_layout.addWidget(self.emergency_exit_gui_button)
 
+        #create a container widget, and place the main layout inside of it
         self.container = QWidget()
         self.container.setLayout(self.main_layout)
+        #the container with the main layout is set as teh central widget
         self.setCentralWidget(self.container)
 
+    #function to close the GUI window(s). Used by the keyboard interrupt signal or the exit button
     def close_window(self):
         print("closing the window now...")
         self.close()  
 
+    #Dev to see all the widgets inside a certain layout, mostly to find their names for replacement
     def print_all_widgets_in_layout(self, layout, indent=0):
         spacer = "  " * indent
         for i in range(layout.count()):
@@ -127,10 +174,18 @@ class MainWindow(QMainWindow):
                 print(f"{spacer}Layout:")
                 print_all_widgets_in_layout(child_layout, indent + 1)
 
+    #uses the ros node that was passed in to publish text on a topic
+    def publish_from_gui(self, text):
+        if text and self.ros_node:
+            self.ros_node.publish_text(text)
+
+    #dev used for testing that the data can be dynamically changed inside of the GUI
     def set_random_data(self):
         print("setting random data...")
         value = random.randint(0,2)
         value1 = random.randint(0,2)
+        self.random_global_value = value
+        self.publish_from_gui(f"random number: {str(self.random_global_value)}")
 
         # self.print_all_widgets_in_layout(self.general_page_C1_layout)
 
@@ -156,21 +211,60 @@ class MainWindow(QMainWindow):
                     widget = getattr(self, f"general_page_C{coug_number}_widget")
                     self.replace_label(f"{key}{coug_number}", layout, widget, new_label)
 
+    #in order to replace a label, you must know the widgets name, the parent layout, and the parent widget
     def replace_label(self, widget_name, parent_layout, parent_widget, new_label, color=""):
+        """
+        Replaces a label inside of the GUI
+
+        Parameters:
+            widget_name: the name of the widget to be changed
+            parent_layout: the parent layout of the widget to be changed
+            parent_widget: the parent widget of the widget to be changed
+            new_label: the new text/icon the label will be changed to
+            color: optional color to change the label to
+        """
+
         temp_widget = parent_widget.findChild(QWidget, widget_name)
         if temp_widget:
+            #the index of the widget in respect to its parent layout
             index = parent_layout.indexOf(temp_widget)
         else:
             print("widget_name not found")
             return
 
         parent_layout.removeWidget(temp_widget)
+        #set parent to none so that it doesn't have any lingering consequences
         temp_widget.setParent(None)
 
-        # Insert new_label at the same index
+        #The new label has the same name as the old one, so that it can be changed again
         new_label.setObjectName(widget_name)
+        #set the optional color, if there wasn't a color passed, then it doesn't change anything
         new_label.setStyleSheet(f"color: {color};")
+        #insert the new widget in the same index as the old one was, so the order of the text doesn't
         parent_layout.insertWidget(index, new_label)
+
+    def find_label(self, widget_name, parent_layout, parent_widget):
+        """
+        Used by replace label to find a specific label in a layout
+
+        Parameters:
+            widget_name: the name of the widget to be changed
+            parent_layout: the parent layout of the widget to be changed
+            parent_widget: the parent widget of the widget to be changed
+        """
+
+        temp_widget = parent_widget.findChild(QWidget, widget_name)
+        if temp_widget:
+            index = parent_layout.indexOf(temp_widget)
+            if isinstance(temp_widget, QLabel):
+                label_text = temp_widget.text()
+                print("Label text:", label_text)
+                return label_text
+            else:
+                print(f"{widget_name} is not a QLabel")
+        else:
+            print("widget_name not found")
+            return None
 
     def get_status_message_color(self, message):
         if message.lower() == "running": message_color = "green"
@@ -215,20 +309,27 @@ class MainWindow(QMainWindow):
         widget.setAutoFillBackground(True)
         widget.setPalette(palette)
 
+    def load_coug1_missions_button(self):
+        self.confirm_reject_label.setText("Loading Coug 1 missiony...")
+        self.publish_from_gui("Loading the missions...")
+
     def load_missions_button(self):
         #add load missions logic
         self.confirm_reject_label.setText("Loading the missions...")
-        print("Loading the missions...")
+        self.publish_from_gui("Loading the missions...")
+        # print("Loading the missions...")
 
     def start_missions_button(self):
         #add start missions logic
         self.confirm_reject_label.setText("Starting the missions...")
-        print("Starting the missions...")
+        self.publish_from_gui("Starting the missions...")
+        # print("Starting the missions...")
 
     def recallCougs(self):
         #add recall cougs logic
         self.confirm_reject_label.setText("Recalling the Cougs...")
-        print("Recalling the Cougs...")
+        self.publish_from_gui("Recalling the Cougs...")
+        # print("Recalling the Cougs...")
     
     def AbortAllMissions(self):
         #add abort all missions logic
@@ -237,22 +338,27 @@ class MainWindow(QMainWindow):
         dlg = AbortMissionsDialog(self)
         if dlg.exec():
             self.confirm_reject_label.setText("Aborting all missions...")
+            self.publish_from_gui("Aborting all missions...")
         else:
             self.confirm_reject_label.setText("Canceling abort missions command...")
-        print("You pressed the abort all missions button")
+            # self.publish_from_gui("Canceling abort missions command...")
+        # print("You pressed the abort all missions button")
     
+    #template to make a vertical line
     def make_vline(self):
         Vline = QFrame()
         Vline.setFrameShape(QFrame.Shape.VLine)
         Vline.setFrameShadow(QFrame.Shadow.Sunken)
         return Vline
 
+    #template to make a horizontal line
     def make_hline(self):
         Hline = QFrame()
         Hline.setFrameShape(QFrame.Shape.HLine)
         Hline.setFrameShadow(QFrame.Shadow.Sunken)
         return Hline
 
+    #used to set all of the widgets on the general page
     def set_general_page_widgets(self):
         self.general_page_layout = self.tab_dict["General"][1]
 
@@ -288,16 +394,20 @@ class MainWindow(QMainWindow):
         self.set_general_page_column_widgets(self.general_page_C2_layout, 2)
         self.set_general_page_column_widgets(self.general_page_C3_layout, 3)
 
+    #set the widgets of the first column on the general page
     def set_general_page_C0_widgets(self):
         # Create buttons
         self.Load_missions_button = QPushButton("Load Missions")
         self.Load_missions_button.clicked.connect(self.load_missions_button)
+        self.Load_missions_button.setStyleSheet("background-color: blue; color: black;")
 
         self.Start_missions_button = QPushButton("Start Missions")
         self.Start_missions_button.clicked.connect(self.start_missions_button)
+        self.Start_missions_button.setStyleSheet("background-color: blue; color: black;")
 
         self.Recall_cougs_button = QPushButton("Recall Cougs")
         self.Recall_cougs_button.clicked.connect(self.recallCougs)
+        self.Recall_cougs_button.setStyleSheet("background-color: blue; color: black;")
 
         self.abort_all_missions = QPushButton("Abort All Missions")
         self.abort_all_missions.clicked.connect(self.AbortAllMissions)
@@ -327,6 +437,7 @@ class MainWindow(QMainWindow):
 
         self.general_page_C0_layout.addWidget(self.abort_all_missions)
             
+    #template to set the rest of widgets on the rest of the columns on the general page
     def set_general_page_column_widgets(self, layout, coug_number):
         # Create and style the header label
         title_label = QLabel(f"Coug {coug_number}:")
@@ -364,7 +475,6 @@ class MainWindow(QMainWindow):
                     layout.addSpacing(40)
 
                 case "Sensors":
-
                     modem_sensor_widget = self.create_icon_and_text("Modem", self.icons_dict[self.feedback_dict["Modem_sensors"][coug_number]], self.tab_spacing)
                     modem_sensor_widget.setObjectName(f"Modem_sensors{coug_number}")
                     layout.addWidget(modem_sensor_widget)
@@ -412,24 +522,356 @@ class MainWindow(QMainWindow):
                     layout.addSpacing(40)
 
         # Add spacer to push content up
-        spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        spacer = QSpacerItem(0, 0, QSizePolicy .Policy.Minimum, QSizePolicy.Policy.Expanding)
         layout.addItem(spacer)
 
-    def create_icon_and_text(self, text, icon, temp_tab_spacing):
+    def set_specific_coug_widgets(self, coug_number):
+        #dynamic layout name is now set to QHBoxLayout() from the tab dictionary
+        setattr(self, f"coug{coug_number}layout", self.tab_dict[f"Coug {coug_number}"][1])
+        getattr(self, f"coug{coug_number}layout").setSpacing(0)
+        getattr(self, f"coug{coug_number}layout").setContentsMargins(0, 0, 0, 0)
+
+        #col1 - accessing feedback dictionary 
+        getattr(self, f"coug{coug_number}layout").addWidget(self.create_specific_coug_column0(coug_number), alignment=Qt.AlignmentFlag.AlignTop)
+        getattr(self, f"coug{coug_number}layout").addWidget(self.create_specific_coug_column01(coug_number), alignment=Qt.AlignmentFlag.AlignTop)
+
+        #vline
+        getattr(self, f"coug{coug_number}layout").addWidget(self.make_vline())
+        #col2 - buttons
+        getattr(self, f"coug{coug_number}layout").addWidget(self.create_coug_buttons_column(coug_number))
+        #vline
+        getattr(self, f"coug{coug_number}layout").addWidget(self.make_vline())
+
+        # col3 - console scripts
+        temp_container = QWidget()
+        temp_container.setFixedWidth(300)
+        temp_layout = QVBoxLayout(temp_container)
+
+        # First text label (bold title)
+        title_text = "Console information/message log"
+        title_label = QLabel(title_text)
+        title_label.setWordWrap(True)
+        title_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        title_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        temp_layout.addWidget(title_label)
+
+        # Second text label (wrapped long message)
+        message_text = (
+            "Welcome to the advanced testing log for your GUI layout system. This message is designed to span a significant "
+            "number of lines to ensure that your scrollable area handles content overflow gracefully. Each sentence contributes "
+            "to building a realistic use case where a developer or end user would need to read through a large volume of text.\n\n"
+
+            "In the world of robotics and embedded systems, message logs often include timestamps, sensor readings, diagnostic "
+            "information, and user feedback. These details can accumulate quickly, especially when a system is under load or when "
+            "multiple subsystems are reporting simultaneously. Properly managing how that data is displayed is essential.\n\n"
+
+            "Let’s consider a scenario where your GUI is being used to monitor a fleet of underwater robots. Each unit might "
+            "send frequent status reports including depth, heading, battery level, leak detection status, sonar returns, and "
+            "environmental sensor data such as temperature, salinity, and pressure. If a fault is detected, additional logs are "
+            "generated to help with troubleshooting.\n\n"
+
+            "This message simulates such an output. We begin with a system check: All modules initialized successfully. "
+            "IMU calibration completed. GPS signal locked. Radio module online. WiFi handshake successful.\n\n"
+
+            "Next, we observe active telemetry: Heading 253.7 degrees. Depth 14.6 meters. Internal temperature: 35.4°C. "
+            "Battery at 83%. Leak sensor nominal. DVL reports bottom lock achieved. Camera feed initialized.\n\n"
+
+            "From here, diagnostics continue: Propulsion test passed. Manipulator test failed: motor controller not responding. "
+            "Fallback routine engaged. Logging full diagnostic traceback for future analysis.\n\n"
+
+            "Users should be aware that any error or warning must be scannable and clearly distinguishable from regular output. "
+            "This can be done through font weight, color, or formatting styles such as indentation and bulleting. For example:\n"
+            "- ERROR: Manipulator arm failed to extend\n"
+            "- WARNING: Depth sensor value out of expected range\n"
+            "- INFO: Waiting for surface command acknowledgment\n\n"
+
+            "In a real interface, the user may copy this text for later use or export logs to a file. Therefore, the interface "
+            "should maintain formatting consistency and avoid cutting off words or lines unexpectedly.\n\n"
+
+            "Scrolling must be vertical only. Horizontal scrolling makes reading long logs a chore and degrades user experience. "
+            "Wrapping should occur at word boundaries to enhance legibility. Margins and line spacing should be adequate but not excessive.\n\n"
+
+            "This is line 30. Still scrolling? Good. If your vertical scrollbar is behaving, you’re seeing this message exactly as intended.\n\n"
+
+            "Let’s push to 40 lines: Data stream stable. Reconnection attempts: 0. Command acknowledgment rate: 99.7%. "
+            "Uplink stable. Downlink stable. Operator status: Connected. Console heartbeat confirmed.\n\n"
+
+            "Final diagnostics: All systems nominal. UI test passed. Scrollbar visible. Text wrapping complete. Layout responsive. "
+            "Mission control ready for deployment.\n\n"
+
+            "End of long message."
+        )
+
+        message_label = QLabel(message_text)
+        message_label.setWordWrap(True)
+        message_label.setFont(QFont("Arial", 15))
+        message_label.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        message_label.setContentsMargins(0, 0, 0, 0)
+
+        message_label.setFixedWidth(500)
+        message_label.setObjectName(f"Console_messages{coug_number}")
+
+        scroll_content = QWidget()
+        scroll_layout = QVBoxLayout(scroll_content)
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.addWidget(message_label)
+
+        # Create QScrollArea and set scroll content
+        scroll_area = QScrollArea()
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(scroll_content)
+        scroll_area.setFixedHeight(int(self.height() * (2/3)))
+
+        # Add scroll_area to your layout
+        temp_layout.addWidget(scroll_area)
+
+        temp_layout.addWidget(self.make_hline())
+        temp_layout.addSpacing(10)
+        temp_layout.addWidget(scroll_area)
+
+        spacer = QSpacerItem(0, 0, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
+        temp_layout.addItem(spacer)
+
+        # Add the temp container to the coug layout
+        getattr(self, f"coug{coug_number}layout").addWidget(temp_container)
+
+    #used to create an icon next to text in a pre-determined fashion
+    def create_icon_and_text(self, text, icon=None, temp_tab_spacing=None):
         temp_container = QWidget()
         temp_layout = QHBoxLayout(temp_container)
-        temp_layout.setContentsMargins(temp_tab_spacing, 0, 0, 0)
+        if temp_tab_spacing: 
+            temp_layout.setContentsMargins(temp_tab_spacing, 0, 0, 0)
         temp_layout.setSpacing(20)
-        icon_label = QLabel()
-        icon_label.setPixmap(self.style().standardIcon(icon).pixmap(16, 16))
-        icon_label.setContentsMargins(0, 0, 0, 0)
-        icon_label.setFixedSize(16, 16)
+        if icon:
+            icon_label = QLabel()
+            icon_label.setPixmap(self.style().standardIcon(icon).pixmap(16, 16))
+            icon_label.setContentsMargins(0, 0, 0, 0)
+            icon_label.setFixedSize(16, 16)
+            temp_layout.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         text_label = QLabel(text)
         text_label.setFont(QFont("Arial", 13))
         text_label.setContentsMargins(0, 0, 0, 0)
-        temp_layout.addWidget(icon_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         temp_layout.addWidget(text_label, alignment=Qt.AlignmentFlag.AlignVCenter)
         return temp_container
+
+    def create_title_label(self, text):
+        # Create and style the label
+        temp_label = QLabel(text)
+        temp_label.setFixedWidth(300)
+        temp_label.setFont(QFont("Arial", 17, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        return temp_label
+
+    def create_coug_buttons_column(self, coug_number):
+        temp_container = QWidget()
+        temp_container.setFixedWidth(300)
+        temp_layout = QVBoxLayout(temp_container)
+
+        #load mission (blue)
+        self.create_coug_button(coug_number, "load_mission", "Load Mission", "blue", self.load_missions_button)
+        #start mission (blue)
+        self.create_coug_button(coug_number, "start_mission", "Start Mission", "blue", self.start_missions_button)
+        #disarm thruster (yellow)
+        self.create_coug_button(coug_number, "disarm_thruster", "Disarm Thruster", "yellow", self.start_missions_button)
+        #deactivate DVL (yellow)
+        self.create_coug_button(coug_number, "deactivate_DVL", "Deactivate DVl", "yellow", self.start_missions_button)
+        #toggle running lights (yellow)
+        self.create_coug_button(coug_number, "toggle_lights", "Toggle Running Lights", "yellow", self.start_missions_button)
+        #restart R-Pi (yellow)
+        self.create_coug_button(coug_number, "restart_RP", "Restart R-Pi", "yellow", self.start_missions_button)
+        #return to base (blue)
+        self.create_coug_button(coug_number, "return_to_base", "Return to Base", "blue", self.start_missions_button)
+        #system reboot (red)
+        self.create_coug_button(coug_number, "system_reboot", "System Reboot", "red", self.start_missions_button)
+        #abort mission (red)
+        self.create_coug_button(coug_number, "abort_misson", "Abort Mission", "red", self.start_missions_button)
+        #emergency shutdown (red)
+        self.create_coug_button(coug_number, "emergency_shutdown", "Emergency Shutdown", "red", self.start_missions_button)
+
+
+        #add all the buttons to the layout
+        temp_layout.addWidget(getattr(self, f"load_mission_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"start_mission_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"disarm_thruster_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"deactivate_DVL_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"toggle_lights_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"restart_RP_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"return_to_base_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"system_reboot_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"abort_misson_coug{coug_number}_button"))
+        temp_layout.addWidget(getattr(self, f"emergency_shutdown_coug{coug_number}_button"))
+        return temp_container
+
+    #Dynamically creates a QPushButton with the given properties and stores it as an attribute.
+    def create_coug_button(self, coug_number, name, text, color, callback):
+        """
+        Dynamically creates a QPushButton with the given properties and stores it as an attribute.
+
+        Parameters:
+            coug_number (int): Which Coug this button is for.
+            name (str): Short functional name for the button (e.g., "start_mission", "disarm_thruster").
+            text (str): Text to display on the button.
+            color (str): Background color for the button.
+            callback (function): Function to call when the button is clicked.
+        """
+        button = QPushButton(text)
+        button.clicked.connect(callback)
+        button.setStyleSheet(f"background-color: {color}; color: black")
+        attr_name = f"{name}_coug{coug_number}_button"
+        setattr(self, attr_name, button)
+
+    def create_specific_coug_column0(self, coug_number):
+        temp_layout = QVBoxLayout()
+        temp_layout.setContentsMargins(0, 0, 0, 0)
+        temp_layout.setSpacing(0) 
+
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.Box)
+        frame.setLayout(temp_layout)    
+
+        temp_container = QWidget()
+        temp_container.setMaximumWidth(180)
+        container_layout = QVBoxLayout(temp_container)
+        container_layout.addWidget(frame)
+
+        temp_layout.addWidget(self.create_title_label(f"Coug {coug_number}"), alignment=Qt.AlignmentFlag.AlignTop)
+        
+        temp_label = QLabel("Connections")
+        temp_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+
+        wifi_widget = self.create_icon_and_text("Wifi", self.icons_dict[self.feedback_dict["Wifi_connections"][coug_number]], 0)
+        wifi_widget.setObjectName(f"Wifi_connections{coug_number}")
+        temp_layout.addWidget(wifi_widget)
+
+        radio_widget = self.create_icon_and_text("Radio", self.icons_dict[self.feedback_dict["Radio_connections"][coug_number]], 0)
+        radio_widget.setObjectName(f"Radio_connections{coug_number}")
+        temp_layout.addWidget(radio_widget)
+
+        modem_widget = self.create_icon_and_text("Modem", self.icons_dict[self.feedback_dict["Modem_connections"][coug_number]], 0)
+        modem_widget.setObjectName(f"Modem_connections{coug_number}")
+        temp_layout.addWidget(modem_widget)
+        temp_layout.addSpacing(20)
+
+        temp_label = QLabel("Sensors")
+        temp_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+
+        modem_sensor_widget = self.create_icon_and_text("Modem", self.icons_dict[self.feedback_dict["Modem_sensors"][coug_number]], 0)
+        modem_sensor_widget.setObjectName(f"Modem_sensors{coug_number}")
+        temp_layout.addWidget(modem_sensor_widget)
+
+        DVL_sensor_widget = self.create_icon_and_text("DVL", self.icons_dict[self.feedback_dict["DVL_sensors"][coug_number]], 0)
+        DVL_sensor_widget.setObjectName(f"DVL_sensors{coug_number}")
+        temp_layout.addWidget(DVL_sensor_widget)
+
+        GPS_sensor_widget = self.create_icon_and_text("GPS", self.icons_dict[self.feedback_dict["GPS_sensors"][coug_number]], 0)
+        GPS_sensor_widget.setObjectName(f"GPS_sensors{coug_number}")
+        temp_layout.addWidget(GPS_sensor_widget)
+        
+        IMU_sensor_widget = self.create_icon_and_text("IMU", self.icons_dict[self.feedback_dict["IMU_sensors"][coug_number]], 0)
+        IMU_sensor_widget.setObjectName(f"IMU_sensors{coug_number}")
+        temp_layout.addWidget(IMU_sensor_widget)
+
+        Leak_sensor_widget = self.create_icon_and_text("Leak Detector", self.icons_dict[self.feedback_dict["Leak_sensors"][coug_number]], 0)
+        Leak_sensor_widget.setObjectName(f"Leak_sensors{coug_number}")
+        temp_layout.addWidget(Leak_sensor_widget)
+
+        Battery_sensor_widget = self.create_icon_and_text("Battery", self.icons_dict[self.feedback_dict["Battery_sensors"][coug_number]], 0)
+        Battery_sensor_widget.setObjectName(f"Battery_sensors{coug_number}")
+        temp_layout.addWidget(Battery_sensor_widget)
+
+        return temp_container
+
+    #create the second sub-column in the first column of the specific cougar pages (starts with "Nodes")
+    def create_specific_coug_column01(self, coug_number):
+        temp_layout = QVBoxLayout()
+        temp_layout.setContentsMargins(0, 0, 0, 0)
+        temp_layout.setSpacing(0) 
+
+        frame = QFrame()
+        frame.setFrameShape(QFrame.Shape.Box)
+        frame.setLayout(temp_layout)    
+
+        temp_container = QWidget()
+        temp_container.setMaximumWidth(220)
+        container_layout = QVBoxLayout(temp_container)
+        container_layout.addWidget(frame)
+
+        temp_layout.addWidget(self.create_title_label(f""), alignment=Qt.AlignmentFlag.AlignTop)
+        
+        temp_label = QLabel("Nodes")
+        temp_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+
+        Safety_Monitoring_widget = self.create_icon_and_text("Safety Monitoring", self.icons_dict[self.feedback_dict["Safety_Monitoring_nodes"][coug_number]], 0)
+        Safety_Monitoring_widget.setObjectName(f"Safety_Monitoring_nodes{coug_number}")
+        temp_layout.addWidget(Safety_Monitoring_widget)
+
+        Depth_Controller_widget = self.create_icon_and_text("Depth Controller", self.icons_dict[self.feedback_dict["Depth_Controller_nodes"][coug_number]], 0)
+        Depth_Controller_widget.setObjectName(f"Depth_Controller_nodes{coug_number}")
+        temp_layout.addWidget(Depth_Controller_widget)
+        
+        Heading_Controller_widget = self.create_icon_and_text("Heading Controller", self.icons_dict[self.feedback_dict["Heading_Controller_nodes"][coug_number]], 0)
+        Heading_Controller_widget.setObjectName(f"Heading_Controller_nodes{coug_number}")
+        temp_layout.addWidget(Heading_Controller_widget)
+
+        Factor_Graph_widget = self.create_icon_and_text("Factor Graph", self.icons_dict[self.feedback_dict["Factor_Graph_nodes"][coug_number]], 0)
+        Factor_Graph_widget.setObjectName(f"Factor_Graph_nodes{coug_number}")
+        temp_layout.addWidget(Factor_Graph_widget)
+
+        Modem_Timing_widget = self.create_icon_and_text("Modem Timing", self.icons_dict[self.feedback_dict["Modem_Timing_nodes"][coug_number]], 0)
+        Modem_Timing_widget.setObjectName(f"Modem_Timing_nodes{coug_number}")
+        temp_layout.addWidget(Modem_Timing_widget)
+
+        temp_label = QLabel("Mission")
+
+        temp_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)        
+        
+        temp_label = QLabel(f"This is where the mission for coug #{coug_number} will go.")
+        # temp_label = QLabel(f"")
+        temp_label.setWordWrap(True)
+        temp_label.setFont(QFont("Arial", 13))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+
+        temp_label = QLabel("Modem")
+        temp_label.setFont(QFont("Arial", 15, QFont.Weight.Bold))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+   
+        temp_label = QLabel(f"This is where the messages from the modem for coug #{coug_number} will go.")
+        # temp_label = QLabel(f"")
+        temp_label.setWordWrap(True)
+        temp_label.setFont(QFont("Arial", 13))
+        temp_label.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        temp_label.setMinimumHeight(temp_label.sizeHint().height())
+        temp_layout.addSpacing(20)
+        temp_layout.addWidget(temp_label)
+
+        return temp_container
+
+    #currently used as a proof of concept of receiving subscriptions
+    def recieve_message(self, message): 
+        self.confirm_reject_label.setText(message.data)
+
+#used by ros to open a window. Needed in order to start PyQt on a different thread than ros
+def OpenWindow(ros_node):
+    app = QApplication(sys.argv)
+    window = MainWindow(ros_node)
+    window.show()
+    return app, window  # Return both
 
 class AbortMissionsDialog(QDialog):
     def __init__(self, parent=None):
@@ -457,16 +899,3 @@ class AbortMissionsDialog(QDialog):
         layout.addWidget(message)
         layout.addWidget(self.buttonBox)
         self.setLayout(layout)
-
-app = QApplication(sys.argv)
-window = MainWindow()
-window.show()
-
-#can control + c from the terminal
-import signal
-signal.signal(signal.SIGINT, signal.SIG_DFL)  # Allow Ctrl+C to exit
-
-try:
-    sys.exit(app.exec())
-except KeyboardInterrupt:   #can control + c from GUI
-    print("Ctrl+C detected in terminal. Closing app.")
